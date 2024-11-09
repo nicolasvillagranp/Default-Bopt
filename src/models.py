@@ -2,7 +2,7 @@ from src.utils import set_seed
 
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
-
+from sklearn.neural_network import MLPClassifier
 
 from botorch.models import SingleTaskGP
 from botorch import fit_gpytorch_mll
@@ -15,14 +15,14 @@ import torch
 from tqdm import tqdm
 
 
-DEFAULT_MODEL = RandomForestClassifier()
-PARAMS_NAME = ['n_estimators', 'min_samples_split', 'min_samples_leaf']
-BOUNDS = [(10, 200), (2, 10), (1, 4)]
-PARAMS_VALUE = {param: DEFAULT_MODEL.get_params()[param] for param in PARAMS_NAME}
+random_params_name = ['n_estimators', 'min_samples_split', 'min_samples_leaf']
+random_params_value = {param: RandomForestClassifier().get_params()[param] for param in random_params_name}
+random_bounds = [(10, 200), (2, 10), (1, 4)]
 
 class BoRandomForest:
+    DEFAULT_MODEL = RandomForestClassifier()
     def __init__(self, X: np.ndarray, y: np.ndarray, n_splits: int = 5, score: str = 'accuracy',
-                 params_name: list = PARAMS_NAME, bounds: list = BOUNDS, seed: int = 42):
+                 params_name: list = random_params_name , bounds: list = random_bounds, seed: int = 42):
         """
         Initialize the Bayesian Optimizer for RandomForestClassifier.
 
@@ -30,14 +30,14 @@ class BoRandomForest:
             X (np.ndarray): Feature matrix.
             y (np.ndarray): Target vector.
             n_splits (int): Number of cross-validation splits.
-            score (str): Scoring metric.
+            score (str): Scoring metric. 
             params_name (list): List of hyperparameter names to optimize.
             bounds (list): List of tuples defining the bounds for each hyperparameter.
         """
 
         # Validate hyperparameter names
         for param_name in params_name:
-            if param_name not in DEFAULT_MODEL.get_params().keys():
+            if param_name not in self.DEFAULT_MODEL.get_params().keys():
                 raise ValueError(f'Hyperparameter "{param_name}" not found in RandomForestClassifier.')
 
         set_seed(42)
@@ -47,7 +47,7 @@ class BoRandomForest:
         self.seed = seed
         self.score = score
         self.cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.seed)
-        self._params_name = params_name
+        self.params_name = params_name
         self.bounds = torch.tensor(bounds, dtype=torch.float)  
         self.model = RandomForestClassifier
         self.best_params_ = None
@@ -91,16 +91,16 @@ class BoRandomForest:
         upper_bounds = self.bounds[:, 1] 
         
         if type == 'random':
-            samples = torch.rand(n_initial, len(self._params_name)) * (upper_bounds - lower_bounds) + lower_bounds 
+            samples = torch.rand(n_initial, len(self.params_name)) * (upper_bounds - lower_bounds) + lower_bounds 
             # TODO
             # Remove duplicates
 
         elif type == 'default':
-            samples = torch.tensor([init_params[param] for param in self._params_name],
+            samples = torch.tensor([init_params[param] for param in self.params_name],
                                               dtype=torch.float).unsqueeze(0) 
             
         else:
-            center = torch.tensor([init_params[param] for param in self._params_name],
+            center = torch.tensor([init_params[param] for param in self.params_name],
                                       dtype=torch.float) 
             # Define standard deviations as 5% of the bounds range
             std_dev = (upper_bounds - lower_bounds) * np.clip(np.random.normal(loc = 0.0, scale = 0.02), 0, 0.02)
@@ -119,7 +119,7 @@ class BoRandomForest:
 
         # Evaluate all initial points.
         for params in all_params:
-            param_dict = dict(zip(self._params_name, params))
+            param_dict = dict(zip(self.params_name, params))
             Y = self._evaluate(param_dict)
             Y_init.append(Y)
 
@@ -176,7 +176,7 @@ class BoRandomForest:
                 candidate = torch.round(candidate).long()
                 candidate = torch.clamp(candidate, self.bounds[:, 0].long(), self.bounds[:, 1].long())
 
-                param_dict = dict(zip(self._params_name, candidate.squeeze().tolist()))
+                param_dict = dict(zip(self.params_name, candidate.squeeze().tolist()))
                 Y_new = self._evaluate(param_dict)
 
                 X = torch.cat([X, candidate.float()], dim=0).double()
@@ -191,9 +191,179 @@ class BoRandomForest:
                 pbar.update(1)
 
 
+mlp_params_name = ['learning_rate_init', 'alpha']
+mlp_params_value = {param: MLPClassifier().get_params()[param] for param in mlp_params_name}
+mlp_bounds = [(1e-5, 1e-1), (1e-5, 1e-1)]
 
+class BoMLPClassifier:
+    def __init__(self, X: np.ndarray, y: np.ndarray, n_splits: int = 5, score: str = 'accuracy',
+                 params_name: list = mlp_params_name, bounds: list = mlp_bounds, seed: int = 42):
+        """
+        Initialize the Bayesian Optimizer for MLPClassifier.
 
+        Args:
+            X (np.ndarray): Feature matrix.
+            y (np.ndarray): Target vector.
+            n_splits (int): Number of cross-validation splits.
+            score (str): Scoring metric.
+            params_name (list): List of hyperparameter names to optimize.
+            bounds (list): List of tuples defining the bounds for each hyperparameter.
+            seed (int): Random seed for reproducibility.
+        """
 
+        # Validate hyperparameter names
+        for param_name in params_name:
+            if param_name not in MLPClassifier().get_params().keys():
+                raise ValueError(f'Hyperparameter "{param_name}" not found in MLPClassifier.')
 
+        set_seed(seed)
+
+        self.X_train = X
+        self.y_train = y
+        self.seed = seed
+        self.score = score
+        self.cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.seed)
+        self._params_name = params_name
+        self.bounds = torch.tensor(bounds, dtype=torch.float)  
+        self.model = MLPClassifier
+        self.best_params_ = None
+        self.best_score_ = - np.inf
+
+    def _evaluate(self, params: dict) -> float:
+        """
+        Evaluate the MLPClassifier with given hyperparameters.
+
+        Args:
+            params (dict): Dictionary containing hyperparameters.
+
+        Returns:
+            float: Mean cross-validated score.
+        """
+        model = self.model(random_state=self.seed, max_iter=200, **params)
+        scores = cross_val_score(model, self.X_train, self.y_train, cv=self.cv, scoring=self.score, n_jobs=-1)
+        return scores.mean()
+
+    def _generate_initial(self, type: str = 'random', init_params: dict = None, n_initial: int = 10):
+        """
+        Generate initial set of hyperparameters based on the specified type.
+
+        Args:
+            type (str): Type of initialization ('random', 'default', 'sample').
+            init_params (dict, optional): Dictionary of hyperparameters for 'default' and 'sample' types.
+            n_initial (int): Number of initial points to generate (applicable for 'random' and 'sample').
+
+        Returns:
+            X_init (torch.Tensor): Tensor of shape (n_samples, d)
+            Y_init (torch.Tensor): Tensor of shape (n_samples, 1)
+        """
+        # Validate the 'type' parameter.
+        if type not in ['random', 'default', 'sample']:
+            raise ValueError(f"Unsupported type '{type}'. Supported types are 'random', 'default', 'sample'.")
+
+        Y_init = []
+        lower_bounds = self.bounds[:, 0]  
+        upper_bounds = self.bounds[:, 1] 
+        
+        if type == 'random':
+            samples = torch.rand(n_initial, len(self._params_name)) * (upper_bounds - lower_bounds) + lower_bounds 
+            # TODO: Remove duplicates if necessary
+
+        elif type == 'default':
+            if init_params is None:
+                init_params = PARAMS_VALUE
+            samples = torch.tensor([init_params[param] for param in self._params_name],
+                                   dtype=torch.float).unsqueeze(0) 
+            
+        else:  # type == 'sample'
+            if init_params is None:
+                raise ValueError("init_params must be provided for 'sample' type.")
+            center = torch.tensor([init_params[param] for param in self._params_name],
+                                  dtype=torch.float) 
+            # Define standard deviations as 5% of the bounds range
+            std_dev = (upper_bounds - lower_bounds) * 0.05
+            samples = torch.normal(mean=center.unsqueeze(0).repeat(n_initial, 1),
+                                   std=std_dev.unsqueeze(0).repeat(n_initial, 1))  
+            # TODO: Remove duplicates if necessary
+
+        # Within the interval range
+        samples = torch.clamp(samples, lower_bounds, upper_bounds)
+        # For continuous hyperparameters like learning rate, rounding is not necessary
+        # If optimizing integer hyperparameters, apply rounding here
+        # samples = torch.round(samples).long()
+
+        all_params = samples.tolist()  # List of lists, each inner list is a hyperparameter set
+
+        # Evaluate all initial points.
+        for params in all_params:
+            param_dict = dict(zip(self._params_name, params))
+            Y = self._evaluate(param_dict)
+            Y_init.append(Y)
+
+        return samples, torch.tensor(Y_init, dtype=torch.float).unsqueeze(-1)
+
+    def fit(self, n_iterations: int = 20, n_initial: int = 10, init_type: str = 'random', init_params: dict = None):
+        """
+        Perform Bayesian Optimization using BoTorch to find the best hyperparameters.
+
+        Args:
+            n_iterations (int): Number of optimization iterations.
+            n_initial (int): Number of initial samples.
+            init_type (str): Type of initialization ('random', 'default', 'sample').
+            init_params (dict, optional): Initial parameters for 'default' or 'sample' types.
+        """
+        # Generate initial samples based on init_type
+        X_init, Y_init = self._generate_initial(type=init_type, init_params=init_params, n_initial=n_initial)
+        X = X_init.double()
+        Y = Y_init.squeeze(-1).double()
+
+        # Avoid division by zero
+        epsilon = 1e-8
+        with tqdm(total=n_iterations, desc="Bayesian Optimization Progress", unit="iter") as pbar:
+            for i in range(n_iterations):
+                # Apply scaling as recommended by BoTorch
+                scaling_factors = self.bounds[:, 1] - self.bounds[:, 0] + epsilon  
+                X_normalized = (X - self.bounds[:, 0]) / scaling_factors  
+
+                # Define and fit the Gaussian Process model
+                model = SingleTaskGP(X_normalized, Y.unsqueeze(-1))
+                mll = ExactMarginalLogLikelihood(model.likelihood, model)
+                fit_gpytorch_mll(mll)
+
+                # Define the acquisition function (Log Expected Improvement)
+                LEI = LogExpectedImprovement(model, best_f=Y.max().item())
+
+                # Define bounds for the acquisition function (0 to 1 for normalized)
+                scaled_bounds = torch.stack([torch.zeros_like(self.bounds[:, 0], dtype=torch.double),
+                                            torch.ones_like(self.bounds[:, 1], dtype=torch.double)], dim=1)
+
+                # Optimize acquisition function to find next candidate
+                candidate_normalized, _ = optimize_acqf(
+                    LEI,
+                    bounds=scaled_bounds.t(),  
+                    q=1,
+                    num_restarts=5,
+                    raw_samples=20,
+                )
+
+                # Scale back to original space
+                candidate = candidate_normalized * scaling_factors.unsqueeze(0) + self.bounds[:, 0].unsqueeze(0)
+                
+
+                param_dict = dict(zip(self._params_name, candidate.squeeze().tolist()))
+                Y_new = self._evaluate(param_dict)
+
+                X = torch.cat([X, candidate.float()], dim=0).double()
+                Y = torch.cat([Y, torch.tensor([Y_new], dtype=torch.float)]).double()
+
+                # Update best parameters if necessary
+                if Y_new > self.best_score_:
+                    self.best_score_ = Y_new
+                    self.best_params_ = param_dict
+
+                pbar.set_postfix({'Best Score': f"{self.best_score_:.4f}"})
+                pbar.update(1)
+
+        print(f"Best Score: {self.best_score_:.4f}")
+        print(f"Best Parameters: {self.best_params_}")
 
 
