@@ -142,12 +142,12 @@ class SkoptRandomForest:
             X = [
                 [
                     np.clip(
-                        np.random.normal(loc=init_params[param], scale=0.05*(high - low)),
+                        np.random.normal(loc=init_params[param], scale=np.random.normal(0, scale=0.05) * (high - low)),
                         low,
                         high
                     ).round() if isinstance(random_params_value[param], int)
                     else np.clip(
-                        np.random.normal(loc=init_params[param], scale=0.05*(high - low)),
+                        np.random.normal(loc=init_params[param], scale=np.random.normal(0, scale=0.05) * (high - low)),
                         low,
                         high
                     )
@@ -184,7 +184,7 @@ def main():
     X, y = data.data, data.target
 
     # Split into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train, _, y_train, _ = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
