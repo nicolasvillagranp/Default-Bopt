@@ -20,6 +20,9 @@ import requests
 import tarfile
 
 
+# Create data directory
+os.makedirs('data', exist_ok=True)
+
 def set_seed(seed: int) -> None:
     """
     This function sets a seed and ensure a deterministic behavior.

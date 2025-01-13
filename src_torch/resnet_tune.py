@@ -1,5 +1,5 @@
 from src_torch.utils import load_data, accuracy
-from src_torch.resnet import ResNet18Classifier  # Assuming the ResNet model is in this file
+from src_torch.resnet import ResNet18Classifier 
 import torch
 from torch.utils.data import DataLoader
 
@@ -7,11 +7,11 @@ from torch.utils.data import DataLoader
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def evaluate(lr_model, lr_linear, dropout, batch_size):
+def evaluate(lr_model, lr_linear, dropout, hidden_size, batch_size):
     # Train with given hyperparams.
     train_dataloader, val_dataloader = load_data(path="data", batch_size=batch_size)
-    model = ResNet18Classifier(10, p=dropout)
-    model = train(model, train_dataloader,  15, lr_model, lr_linear)
+    model = ResNet18Classifier(10, hidden_size=hidden_size, p=dropout)
+    model = train(model, train_dataloader, 15, lr_model, lr_linear)
     total = len(val_dataloader)
     # Test model to optimize.
     model.eval()
@@ -19,11 +19,11 @@ def evaluate(lr_model, lr_linear, dropout, batch_size):
     with torch.no_grad():
         for images, labels in val_dataloader:
             images, labels = images.to(device), labels.to(device)
-            logits = model(images)  
+            logits = model(images.squeeze())  
             correct += accuracy(logits, labels)
     
-    accuracy = correct / total
-    return accuracy
+    accuracy_res = correct / total
+    return -accuracy_res.item()
 
 
 
@@ -43,7 +43,9 @@ def train(model: torch.nn.Module, train_dataloader: DataLoader, epochs: int = 10
         model.train() 
         model.to(device)  
         optimizer = torch.optim.Adam([{'params': model.res.parameters(), 'lr': lr_model}, 
-                                      {'params': model.linear.parameters(), 'lr': lr_linear}])  
+                                      {'params': model.hidden.parameters(), 'lr': lr_linear},
+                                      {'params': model.classifier.parameters(), 'lr': lr_linear}
+                                      ])  
         criterion = torch.nn.CrossEntropyLoss() 
 
         for _ in range(epochs):
@@ -63,8 +65,12 @@ def train(model: torch.nn.Module, train_dataloader: DataLoader, epochs: int = 10
 
 if __name__ == '__main__':
     # Example
-    acc = evaluate(1e-4, 1e-3, 0.2, 128)
+    acc = evaluate(1e-4, 1e-3, 0.2, 512, 128)
     print(acc)
+
+
+
+
 
 
 
